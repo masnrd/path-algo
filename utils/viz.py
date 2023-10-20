@@ -76,7 +76,7 @@ def visualise_hex_dict_to_map(hexagon_values: dict, m: folium.Map, casualty_loca
 
 
 def create_gif(output_filename: str, hexagon_map: dict, hexagon_values: list[dict],
-casualty_locations: set, casualty_detected: dict):
+casualty_locations: set, casualty_detected: dict, dpi: int):
     """
     Create a GIF visualization of hexagon values and detected casualties.
 
@@ -99,7 +99,8 @@ casualty_locations: set, casualty_detected: dict):
     def create_base_map_image(hex_map_shapes: list[tuple[str, Polygon]],
                               global_xlim: tuple[float, float],
                               global_ylim: tuple[float, float],
-                              casualty_locations: set) -> str:
+                              casualty_locations: set,
+                              dpi: int) -> str:
         """
         Create a base map image showing hexagons and casualty locations.
         """
@@ -123,9 +124,9 @@ casualty_locations: set, casualty_detected: dict):
                 gdf_map.plot(ax=ax, color="none", edgecolor="k")
 
         base_filename = os.path.join(os.getcwd(), "base_map.png")
-        plt.savefig(base_filename, dpi=300, bbox_inches="tight")
+        plt.savefig(base_filename, dpi=dpi, bbox_inches="tight")
         plt.close()
-
+        print("Generate base map done!")
         return base_filename
 
     def overlay_hex_on_map(i: int,
@@ -171,7 +172,7 @@ casualty_locations: set, casualty_detected: dict):
     global_ylim = (min(all_lats), max(all_lats))
 
     # Step 1: Create the base map image
-    base_filename = create_base_map_image(hex_map_shapes, global_xlim, global_ylim, casualty_locations)
+    base_filename = create_base_map_image(hex_map_shapes, global_xlim, global_ylim, casualty_locations, dpi)
 
     # Step 2: Overlay hexagons on the base map
     previous_filename = base_filename

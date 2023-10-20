@@ -165,15 +165,15 @@ class TestFramework:
         """
         Evaluate the performance of the pathfinder.
         """
-        num_casualty = len(self.casualty_locations)
         path_coverage = self.check_path_coverage()
         print(f"{self.name}'s Path Coverage: {path_coverage}%")
 
+        num_casualty = len(self.casualty_locations)
         guaranteed_capture, false_negative = self.check_guaranteed_capture()
         if guaranteed_capture and false_negative == 0:
             print(f"{self.name}'s Guaranteed Capture: YES, captured {num_casualty}/{num_casualty}")
         else:
-            print(f"{self.name}'s Guaranteed Capture: NO, captured {num_casualty - false_negative}/{num_casualty}")
+            print(f"{self.name}'s Guaranteed Capture: NO, captured {len(self.casualty_detected)}/{num_casualty}")
             if false_negative:
                 print(f"{self.name}'s False Negative: {false_negative}")
         if self.check_minimum_time_captured():
