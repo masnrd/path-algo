@@ -8,7 +8,8 @@ class PathFinder(ABC):
 
     def __init__(self, res: int, center: tuple):
         self.res = res
-        self.center_hexagon = h3.geo_to_h3(center[0], center[1], resolution=self.res)
+        self.centre_hexagon = h3.geo_to_h3(
+            center[0], center[1], resolution=self.res)
 
     @abstractmethod
     def find_next_step(self, current_position: tuple[int, int], prob_map: np.ndarray) -> tuple[int, int]:
