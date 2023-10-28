@@ -4,20 +4,28 @@ import os
 from PIL import Image
 
 
-def gradient_color(value: int):
+def gradient_color(value: float, min_value: float = 0, max_value: float = 2, greyscale=False):
     """
-    Return a colour hex value from a value between 0-1
+    Return a color hex value from a value between 0-1, based on the range of values in the dictionary.
     """
-    if value < 0:
-        value = 0
-    elif value > 1:
-        value = 1
+    if value < min_value:
+        value = min_value
+    elif value > max_value:
+        value = max_value
 
-    r = int(255 * value)
-    b = int(255 * value)
-    g = int(255 * value)
+    # Normalize the value within the range
+    normalized_value = (value - min_value) / (max_value - min_value)
 
-    hex_string = ""#{:02x}{:02x}{:02x}"".format(r, b, g)
+    if not greyscale:
+        r = int(255 * normalized_value)
+        b = int(255 * (1 - normalized_value))
+        g = 0  # You can adjust the green component as needed
+    else:
+        r = int(255 * (1 - normalized_value))
+        b = int(255 * (1 - normalized_value))
+        g = int(255 * (1 - normalized_value))
+
+    hex_string = "#{:02x}{:02x}{:02x}".format(r, g, b)
     return hex_string
 
 # Add H3 hexagons as polygons to the map, m
@@ -38,9 +46,9 @@ def add_hex_to_map(hexagon_values: list, m: folium.Map):
     for i in range(len(hexagon_values)):
         vertices = h3.h3_to_geo_boundary(hexagon_values[i]["hex_idx"])
         color = color = gradient_color(
-            hexagon_values[i]["step_count"]/num_keys)
+            hexagon_values[i]["step_count"]/num_keys, greyscale=True)
         folium.Polygon(locations=vertices, color=color,
-                       fill=True, fill_opacity=0.6).add_to(m)
+                       fill=False, fill_opacity=0.05).add_to(m)
         folium.map.Marker(h3.h3_to_geo(hexagon_values[i]["hex_idx"]),
                           icon=folium.DivIcon(
             icon_size=(10, 10),
@@ -63,20 +71,27 @@ def visualise_hex_dict_to_map(hexagon_values: dict, m: folium.Map, casualty_loca
     keys = list(hexagon_values.keys())
     num_keys = len(keys)
 
+    # Calculate min and max values from hexagon_values dictionary
+    min_value = min(hexagon_values.values())
+    max_value = max(hexagon_values.values())
+
     for i, hexagon_id in enumerate(hexagon_values):
         vertices = h3.h3_to_geo_boundary(hexagon_id)
-        color = color = gradient_color(hexagon_values[hexagon_id])
+        # color = color = gradient_color(hexagon_values[hexagon_id])
+        # Update the function call in your visualise_hex_dict_to_map function
+        color = gradient_color(
+            hexagon_values[hexagon_id], min_value, max_value)
         if hexagon_id in casualty_locations:
             # Mark casualty
             folium.Polygon(locations=vertices, color="#FF0000",
                            fill=True).add_to(m)
         else:
             folium.Polygon(locations=vertices, color=color,
-                           fill=True, fill_opacity=0.05).add_to(m)
+                           fill=True, fill_opacity=0.005).add_to(m)
 
 
 def create_gif(output_filename: str, hexagon_map: dict, hexagon_values: list[dict],
-casualty_locations: set, casualty_detected: dict, dpi: int):
+               casualty_locations: set, casualty_detected: dict, dpi: int):
     """
     Create a GIF visualization of hexagon values and detected casualties.
 
@@ -92,7 +107,6 @@ casualty_locations: set, casualty_detected: dict, dpi: int):
     from shapely.geometry import Polygon
     import imageio
     from PIL import Image, ImageDraw
-
 
     filenames = []
 
@@ -147,7 +161,8 @@ casualty_locations: set, casualty_detected: dict, dpi: int):
 
         # Convert the current hexagon to vertices
         hex_idx = hexagon_values[i]["hex_idx"]
-        vertices = [(int((pt[1]-global_xlim[0])/(global_xlim[1]-global_xlim[0])*img.width), int((1-(pt[0]-global_ylim[0])/(global_ylim[1]-global_ylim[0]))*img.height)) for pt in h3.h3_to_geo_boundary(hex_idx)]
+        vertices = [(int((pt[1]-global_xlim[0])/(global_xlim[1]-global_xlim[0])*img.width), int((1-(pt[0] -
+                     global_ylim[0])/(global_ylim[1]-global_ylim[0]))*img.height)) for pt in h3.h3_to_geo_boundary(hex_idx)]
 
         if hex_idx in casualty_locations:
             if casualty_detected[hex_idx]:
@@ -164,7 +179,8 @@ casualty_locations: set, casualty_detected: dict, dpi: int):
 
         return filename
 
-    hex_map_shapes = [(hex_id, Polygon([(pt[1], pt[0]) for pt in h3.h3_to_geo_boundary(hex_id)])) for hex_id in hexagon_map.keys()]
+    hex_map_shapes = [(hex_id, Polygon([(pt[1], pt[0]) for pt in h3.h3_to_geo_boundary(
+        hex_id)])) for hex_id in hexagon_map.keys()]
     all_boundaries = [h3.h3_to_geo_boundary(hv) for hv in hexagon_map.keys()]
     all_lons = [pt[1] for boundary in all_boundaries for pt in boundary]
     all_lats = [pt[0] for boundary in all_boundaries for pt in boundary]
@@ -172,12 +188,14 @@ casualty_locations: set, casualty_detected: dict, dpi: int):
     global_ylim = (min(all_lats), max(all_lats))
 
     # Step 1: Create the base map image
-    base_filename = create_base_map_image(hex_map_shapes, global_xlim, global_ylim, casualty_locations, dpi)
+    base_filename = create_base_map_image(
+        hex_map_shapes, global_xlim, global_ylim, casualty_locations, dpi)
 
     # Step 2: Overlay hexagons on the base map
     previous_filename = base_filename
     for i, hexagon in enumerate(hexagon_values):
-        previous_filename = overlay_hex_on_map(i, global_xlim, global_ylim, previous_filename, hexagon_values, hex_map_shapes, casualty_locations, casualty_detected)
+        previous_filename = overlay_hex_on_map(
+            i, global_xlim, global_ylim, previous_filename, hexagon_values, hex_map_shapes, casualty_locations, casualty_detected)
 
     with imageio.get_writer(output_filename, mode="I", duration=1) as writer:
         for filename in filenames:
@@ -186,5 +204,3 @@ casualty_locations: set, casualty_detected: dict, dpi: int):
 
     for filename in filenames:
         os.remove(filename)
-
-

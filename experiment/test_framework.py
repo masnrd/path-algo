@@ -14,7 +14,6 @@ class TestFramework:
         self.res = res
         # TODO: Decide what is the ideal initialized map size
         self.probability_map = self.initialize_probability_map(res)
-        self.add_hotspot()
 
         self.waypoint = centre
         self.f = f
@@ -44,7 +43,8 @@ class TestFramework:
             self.waypoint = self.pathfinder.find_next_step(
                 self.waypoint, self.probability_map)
 
-            hex_idx = h3.geo_to_h3(self.waypoint[0], self.waypoint[1], self.res)
+            hex_idx = h3.geo_to_h3(
+                self.waypoint[0], self.waypoint[1], self.res)
             if hex_idx in self.casualty_locations:
                 coin = random.randint(1, 10)
                 if coin == 1:
@@ -84,7 +84,7 @@ class TestFramework:
             probability_map[hex] = 0
         return probability_map
 
-    def add_hotspot(self, sigma: float = 0.00003, r_range: int = 10):
+    def add_hotspot(self, hotspot: list, sigma: float = 0.00003, r_range: int = 100):
         """
         Update the probability map based on a given hotspot.
 
@@ -100,36 +100,50 @@ class TestFramework:
         def gaussian_probability(distance, sigma=0.01):
             return np.exp(-distance**2 / (2 * sigma**2))
 
-        hex_hotspot = h3.geo_to_h3(self.centre[0], self.centre[1], self.res)
+        hex_hotspot = h3.geo_to_h3(hotspot[0], hotspot[1], self.res)
+
+        delta_probability_map = {}
         for i in range(0, r_range):
             hex_at_r = h3.hex_ring(hex_hotspot, i)
-            distance = euclidean(h3.h3_to_geo(hex_hotspot), h3.h3_to_geo(next(iter(hex_at_r))))
+            distance = euclidean(h3.h3_to_geo(hex_hotspot),
+                                 h3.h3_to_geo(next(iter(hex_at_r))))
             probability = gaussian_probability(distance, sigma)
             for hex_idx in hex_at_r:
-                if hex_idx in self.probability_map.keys():
-                    self.probability_map[hex_idx] += probability
+                delta_probability_map[hex_idx] = probability
+
+        # Distribute
+        total_prob = sum(delta_probability_map.values())
+        if total_prob != 0:
+            delta_probability_map = {
+                key: (value / total_prob) for key, value in delta_probability_map.items()}
+
+        for hex_idx in self.probability_map:
+            if hex_idx in delta_probability_map:
+                self.probability_map[hex_idx] += delta_probability_map[hex_idx]
 
         # Distribute
         total_prob = sum(self.probability_map.values())
         if total_prob != 0:
             self.probability_map = {
-                key: value / total_prob for key, value in self.probability_map.items()}
+                key: (value / total_prob) for key, value in self.probability_map.items()}
+
         else:
             print("Entire probability map is zero")
 
-    def generate_casualty(self, num_casualty: int):
+    def generate_casualty(self, num_casualty: int, seed=0):
         """
         Generate casualty locations.
 
         :param num_casualty: Number of casualties to be generated.
         """
-        all_non_zero_cells = {key for key, value in self.probability_map.items() if value != 0}
+        random.seed(seed)
+        all_non_zero_cells = {
+            key for key, value in self.probability_map.items() if value != 0}
         while len(self.casualty_locations) < num_casualty:
             probability = random.uniform(0, 1)
             random_cell = random.choice(list(all_non_zero_cells))
             if probability < self.probability_map[random_cell]:
                 self.casualty_locations.add(random_cell)
-
 
     def update_probability_map(self):
         """Update the probability map using Baye's theorem.
@@ -171,16 +185,18 @@ class TestFramework:
         num_casualty = len(self.casualty_locations)
         guaranteed_capture, false_negative = self.check_guaranteed_capture()
         if guaranteed_capture and false_negative == 0:
-            print(f"{self.name}'s Guaranteed Capture: YES, captured {num_casualty}/{num_casualty}")
+            print(
+                f"{self.name}'s Guaranteed Capture: YES, captured {num_casualty}/{num_casualty}")
         else:
-            print(f"{self.name}'s Guaranteed Capture: NO, captured {len(self.casualty_detected)}/{num_casualty}")
+            print(
+                f"{self.name}'s Guaranteed Capture: NO, captured {len(self.casualty_detected)}/{num_casualty}")
             if false_negative:
                 print(f"{self.name}'s False Negative: {false_negative}")
         if self.check_minimum_time_captured():
-            print(f"{self.name}'s Minimum Time Capture: {self.minimum_time_captured} seconds")
+            print(
+                f"{self.name}'s Minimum Time Capture: {self.minimum_time_captured} seconds")
         else:
             print(f"{self.name}'s Minimum Time Capture: NA")
-
 
     def check_path_coverage(self) -> float:
         """
@@ -188,10 +204,12 @@ class TestFramework:
 
         :return: Coverage percentage.
         """
-        all_non_zero_cells = {key for key, value in self.probability_map.items() if value != 0}
+        all_non_zero_cells = {
+            key for key, value in self.probability_map.items() if value != 0}
         covered_cells = {item["hex_idx"] for item in self.output}
-        path_covered =  all_non_zero_cells & covered_cells
-        path_coverage = round(len(path_covered) / len(all_non_zero_cells) * 100, 2)
+        path_covered = all_non_zero_cells & covered_cells
+        path_coverage = round(len(path_covered) /
+                              len(all_non_zero_cells) * 100, 2)
         return path_coverage
 
     def check_minimum_time_captured(self):
