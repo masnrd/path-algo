@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pathfinder.interface import PathFinder
 from utils.hex import *
+from utils.angle import *
 
 
 class TestFramework:
@@ -22,6 +23,7 @@ class TestFramework:
         self.casualty_locations = set()
         self.casualty_detected = dict()
         self.minimum_time_captured = None
+        self.accumulated_angle = 0
 
     def run(self, steps: int, update_map: bool = False) -> list[dict]:
         """
@@ -45,6 +47,8 @@ class TestFramework:
 
             hex_idx = h3.geo_to_h3(
                 self.waypoint[0], self.waypoint[1], self.res)
+
+            # Probability of discovering casualty
             if hex_idx in self.casualty_locations:
                 coin = random.randint(1, 10)
                 if coin == 1:
@@ -56,6 +60,12 @@ class TestFramework:
 
             self.output.append({"hex_idx": h3.geo_to_h3(
                 self.waypoint[0], self.waypoint[1], self.res), "step_count": i})
+
+            if len(self.output) >= 3:
+                A = h3.h3_to_geo(self.output[-3]['hex_idx'])
+                B = h3.h3_to_geo(self.output[-2]['hex_idx'])
+                C = h3.h3_to_geo(self.output[-1]['hex_idx'])
+                self.accumulated_angle += get_angle_3_pts(A, B, C)
         if end_time:
             self.minimum_time_captured = end_time - start_time
             self.minimum_time_captured = self.minimum_time_captured.total_seconds()
@@ -181,6 +191,11 @@ class TestFramework:
         """
         path_coverage = self.check_path_coverage()
         print(f"{self.name}'s Path Coverage: {path_coverage}%")
+        if len(self.output) >= 3:
+            print(
+                f"{self.name}'s Angle Curvature(Average angle): {self.accumulated_angle/(len(self.output)-2)} degrees")
+        else:
+            print(f"{self.name}'s Angle Curvature: 0 degrees")
 
         num_casualty = len(self.casualty_locations)
         guaranteed_capture, false_negative = self.check_guaranteed_capture()
