@@ -2,6 +2,8 @@ import h3
 import folium
 import os
 from PIL import Image
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def gradient_color(value: float, min_value: float = 0, max_value: float = 2, greyscale=False):
@@ -120,22 +122,39 @@ def create_gif(output_filename: str, hexagon_map: dict, hexagon_values: list[dic
         """
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        for _, hex_shape in hex_map_shapes:
-            gdf_map = gpd.GeoDataFrame([{'geometry': hex_shape}])
-            gdf_map.plot(ax=ax, color="none", edgecolor="k")
-
         ax.set_xlim(global_xlim)
         ax.set_ylim(global_ylim)
         ax.axis('off')
 
         # Plot the entire hexagon map with no fill
-        for hex_idx, hex_shape in hex_map_shapes:
-            if hex_idx in casualty_locations:
-                gdf_map = gpd.GeoDataFrame([{"geometry": hex_shape}])
-                gdf_map.plot(ax=ax, color="#FF0000", edgecolor="k")
-            else:
-                gdf_map = gpd.GeoDataFrame([{"geometry": hex_shape}])
-                gdf_map.plot(ax=ax, color="none", edgecolor="k")
+        # for hex_idx, hex_shape in (pbar := tqdm(hex_map_shapes)):
+        #     pbar.set_description(f"Processing hex index: {hex_idx}")
+        #     gdf_map = gpd.GeoDataFrame([{'geometry': hex_shape}])
+        #     gdf_map.plot(ax=ax, color="none", edgecolor="k")
+        #     if hex_idx in casualty_locations:
+        #         gdf_map = gpd.GeoDataFrame([{"geometry": hex_shape}])
+        #         gdf_map.plot(ax=ax, color="#FF0000", edgecolor="k")
+        #     else:
+        #         gdf_map = gpd.GeoDataFrame([{"geometry": hex_shape}])
+        #         gdf_map.plot(ax=ax, color="none", edgecolor="k")
+
+        def create_geodataframe(hex_shape, hex_idx, casualty_locations):
+            color = "#FF0000" if hex_idx in casualty_locations else "none"
+            return gpd.GeoDataFrame([{'geometry': hex_shape}]), color
+
+        # Pre-generate GeoDataFrames in parallel
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(create_geodataframe, hex_shape, hex_idx, casualty_locations)
+                    for hex_idx, hex_shape in hex_map_shapes]
+
+        geodataframes = [future.result() for future in futures]
+
+        # Now, in the main thread, do the plotting
+        idx = 0
+        for gdf, color in (pbar :=tqdm(geodataframes)):
+            pbar.set_description(f"Ploting {idx+1}th image on map")
+            gdf.plot(ax=ax, color=color, edgecolor="k")
+            idx += 1
 
         base_filename = os.path.join(os.getcwd(), "base_map.png")
         plt.savefig(base_filename, dpi=dpi, bbox_inches="tight")
@@ -190,10 +209,10 @@ def create_gif(output_filename: str, hexagon_map: dict, hexagon_values: list[dic
     # Step 1: Create the base map image
     base_filename = create_base_map_image(
         hex_map_shapes, global_xlim, global_ylim, casualty_locations, dpi)
-
     # Step 2: Overlay hexagons on the base map
     previous_filename = base_filename
-    for i, hexagon in enumerate(hexagon_values):
+    for i, hexagon in (pbar :=tqdm(enumerate(hexagon_values))):
+        pbar.set_description(f"Overlay hex {i} on map")
         previous_filename = overlay_hex_on_map(
             i, global_xlim, global_ylim, previous_filename, hexagon_values, hex_map_shapes, casualty_locations, casualty_detected)
 
