@@ -60,7 +60,7 @@ def add_hex_to_map(hexagon_values: list, m: folium.Map):
         ).add_to(m)
 
 
-def visualise_hex_dict_to_map(hexagon_values: dict, m: folium.Map, casualty_locations: dict):
+def visualise_hex_dict_to_map(hexagon_values: dict, m: folium.Map, casualty_locations: set):
     """
     Visualise the probability map.
 

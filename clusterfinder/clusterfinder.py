@@ -8,7 +8,7 @@ class DBSCANClusterFinder(ClusterFinder):
     DBSCAN Clustering Object using the DBSCAN algorithm.
 
     Args:
-    - max_gap (int): The maximum distance between two points to be considered neighbors.
+    - max_gap (int): The maximum distance (in km) between two points to be considered neighbors.
     - min_pts (int): The minimum number of neighbors required to be considered a core point.
     """
 

@@ -5,7 +5,6 @@ import h3
 
 # Define an interface using an abstract base class
 class PathFinder(ABC):
-
     def __init__(self, res: int, center: tuple):
         self.res = res
         self.centre_hexagon = h3.geo_to_h3(

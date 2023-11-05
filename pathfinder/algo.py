@@ -26,9 +26,10 @@ class OutwardSpiralPathFinder(PathFinder):
         return current_ij_coord
 
     # Implementation of abstract method that returns next waypoint
-    def find_next_step(self, current_position: tuple[int, int], prob_map: dict) -> tuple[int, int]:
+    def find_next_step(self, current_position: tuple[float, float], prob_map: dict) -> tuple[float, float]:
         current_position_ij = h3.experimental_h3_to_local_ij(self.centre_hexagon, h3.geo_to_h3(
             current_position[0], current_position[1], resolution=self.res))
+
         # Waypoints are calculated based on ring
         if len(self.next_path_segment) == 1 and self.segment_start_ij_coord == current_position_ij:
             self.segment_start_ij_coord = self.ring_edge_traversal(

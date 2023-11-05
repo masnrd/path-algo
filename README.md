@@ -13,3 +13,11 @@ $ cd path-algo
 $ pip install -r requirements.txt
 $ pip install .
 ```
+
+## Development guide
+- Update Python dependencies
+```shell
+$ cd path-algo
+$ pip list --format=freeze > requirements.txt
+
+```
