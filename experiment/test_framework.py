@@ -2,6 +2,7 @@ from typing import Optional
 
 import numpy as np
 import h3
+import folium
 import random
 from datetime import datetime
 
@@ -11,14 +12,23 @@ from pathfinder.interface import PathFinder
 from utils.hex import *
 from utils.angle import *
 
+N_RINGS_CLUSTER = 16  # 7.5m * 16 = 240m radius
+MAIN_MAP_RADIUS = 0.5  # km
+
 
 class TestFramework:
-    def __init__(self, name: str, res: int, hotspots: list[tuple[float: float]]):
+    def __init__(self, name: str, res: int):
         self.name = name
 
         # Main map
         self.res = res
-        self.clusters = self.initialize_clusters(hotspots)
+        self.centre = None
+        self.main_map = None
+        self.bounds = None
+        self.num_hotspot = None
+        self.num_casualty = None
+        self.hotspots = None            # list[tuple[lat, lng]]
+        self.casualty_locations = None
 
         # Cluster Finder
         self.cluster_finder = None
@@ -36,8 +46,86 @@ class TestFramework:
         # Metrics
         self.evaluation_metrics = list()
 
+    def init_mission(self, main_map: folium.Map, centre: tuple[float, float], num_hotspot: int, num_casualty: int):
+        self.num_hotspot = num_hotspot
+        self.num_casualty = num_casualty
+        self.centre = centre
+        self.main_map = main_map
+        self.bounds = self.add_markers_get_bounds()
+        self.hotspots = self.add_hotspots(num_hotspot)
+        self.casualty_locations = self.add_casualty(num_casualty)
+        self.casualty_locations = set(h3.geo_to_h3(lat, lng, self.res) for lat, lng in self.casualty_locations)
+
+    def add_markers_get_bounds(self, radius_km=MAIN_MAP_RADIUS) -> list[list[float, float], list[float, float]]:
+        """
+        Get bounds of the Folium map by adding feature group with radius radius_km
+        :param radius_km:
+        :return: SW and NE bounding corners in lat, lng
+        """
+        from math import radians, degrees, cos, sin, asin, atan2
+
+        def calculate_offset(lat, lon, d_km, bearing):
+            R = 6371.0  # Radius of the Earth in km
+            bearing = radians(bearing)  # Convert bearing to radians
+            lat1 = radians(lat)  # Current lat point converted to radians
+            lon1 = radians(lon)  # Current long point converted to radians
+
+            lat2 = asin(sin(lat1) * cos(d_km / R) + cos(lat1) * sin(d_km / R) * cos(bearing))
+            lon2 = lon1 + atan2(sin(bearing) * sin(d_km / R) * cos(lat1), cos(d_km / R) - sin(lat1) * sin(lat2))
+
+            lat2 = degrees(lat2)
+            lon2 = degrees(lon2)
+
+            return lat2, lon2
+        # Calculate the NSEW bounds
+        offsets = [
+            calculate_offset(self.centre[0], self.centre[1], radius_km, bearing)
+            for bearing in [0, 90, 180, 270]
+        ]
+
+        # Create a feature group
+        fg = folium.FeatureGroup(name='NSEW markers')
+        for offset in offsets:
+            folium.Marker(offset).add_to(fg)
+        fg.add_to(self.main_map)
+        return fg.get_bounds()
+
+    def add_hotspots(self, num_hotspots):
+        hotspots = []
+        for i in range(num_hotspots):
+            lat = random.uniform(self.bounds[0][0], self.bounds[1][0])
+            lng = random.uniform(self.bounds[0][1], self.bounds[1][1])
+            hotspots.append((lat, lng))
+        return hotspots
+
+    def add_casualty(
+            self, num_casualty: int, casualty_distance_std_dev=0.00005
+    ) -> list:
+        casualty_locations = []
+        num_hotspots = len(self.hotspots)
+
+        # Calculate the number of casualties per hotspot
+        casualties_per_hotspot = max(num_casualty // num_hotspots, 1)  # Ensure at least one casualty per hotspot
+        casualties_remainder = num_casualty % num_hotspots
+
+        for idx, hotspot in enumerate(self.hotspots):
+            hotspot_lat, hotspot_lng = hotspot
+            # Assign an extra casualty to some hotspots to account for remainder
+            extra_casualty = 1 if idx < casualties_remainder else 0
+            for _ in range(casualties_per_hotspot + extra_casualty):
+                casualty_lat = np.random.normal(hotspot_lat, casualty_distance_std_dev)
+                casualty_lng = np.random.normal(hotspot_lng, casualty_distance_std_dev)
+
+                # Ensure that the latitude and longitude are valid
+                casualty_lat = max(min(casualty_lat, 90), -90)
+                casualty_lng = max(min(casualty_lng, 180), -180)
+
+                casualty_locations.append((casualty_lat, casualty_lng))
+
+        return casualty_locations
+
     def run(
-            self, steps: int, num_casualty: int, update_map: bool = False, f: Optional[float] = None
+            self, steps: int, update_map: bool = False, f: Optional[float] = None
     ) -> dict[int: list]:
         # Stage 1: Region Segmentation - Clustering
         self.cluster_results = self.cluster_finder.fit()
@@ -48,33 +136,28 @@ class TestFramework:
         # Stage 3: Search
         for cluster_id, cluster in self.cluster_results.items():
             print(f"\nCluster:", cluster_id)
-
             # Step 1: Find centre for probability map
             centre = self.find_search_centre(cluster)
             self.all_centres[cluster_id] = centre
 
             # Step 2: Initialize probability map based on all mini hotspot
-            probability_map = self.initialize_probability_map(centre, self.res)
+            probability_map = self.initialize_probability_map(centre, N_RINGS_CLUSTER)
             self.all_probability_map[cluster_id] = probability_map
 
             # Step 3: Update probability map based on mini hotspots:
             for mini_hotspot in cluster:
                 probability_map = self.add_mini_hotspot(probability_map, mini_hotspot)
 
-            # Step 4: Generate casualty
-            casualty_locations = self.generate_casualty(probability_map, num_casualty)
-            self.all_casualty_locations[cluster_id] = casualty_locations
-
-            # Step 5: Search
+            # Step 4: Search
             self.path_finder_object = self.path_finder(self.res, centre)
             output, casualty_detected, minimum_time_captured, accumulated_angle = self.search(
-                probability_map, centre, casualty_locations, steps, update_map, f
+                probability_map, centre, self.casualty_locations, steps, update_map, f
             )
             self.all_search_outputs[cluster_id] = output
 
-            # Step 6: Evaluate
+            # Step 5: Evaluate
             metrics = self.evaluate_search(
-                probability_map, casualty_locations, casualty_detected, output, minimum_time_captured, accumulated_angle
+                probability_map, self.casualty_locations, casualty_detected, output, minimum_time_captured, accumulated_angle
             )
             self.evaluation_metrics.append(metrics)
             self.print_individual_metrics(metrics)
@@ -138,13 +221,6 @@ class TestFramework:
         for hex_idx in all_hex_idx:
             probability_map[hex_idx] = 0
         return probability_map
-
-    @staticmethod
-    def initialize_clusters(hotspots: list[tuple[float: float]]) -> list[Point]:
-        clusters = list()
-        for i in range(len(hotspots)):
-            clusters.append(Point(i, hotspots[i]))
-        return clusters
 
     def search(
             self, probability_map: dict[str, float], waypoint: tuple[float, float], casualty_locations: set,
@@ -216,7 +292,9 @@ class TestFramework:
         return minimum_time_captured
 
     def register_cluster_finder(self, cluster_finder: ClusterFinder, *args, **kwargs):
-        self.cluster_finder = cluster_finder(self.clusters, *args, **kwargs)
+        # Convert hotspots to Point
+        hotspots = [Point(i, self.hotspots[i]) for i in range(self.num_hotspot)]
+        self.cluster_finder = cluster_finder(hotspots, *args, **kwargs)
 
     def register_path_finder(self, path_finder: PathFinder):
         """
@@ -276,26 +354,6 @@ class TestFramework:
         else:
             print("Entire probability map is zero")
             return dict()
-
-    @staticmethod
-    def generate_casualty(probability_map: dict[str, float], num_casualty: int) -> set:
-        """
-        Generate casualty locations.
-
-        :param probability_map:
-        :param num_casualty: Number of casualties to be generated.
-        """
-        casualty_locations = set()
-
-        all_non_zero_cells = {
-            key for key, value in probability_map.items() if value != 0}
-        while len(casualty_locations) < num_casualty:
-            probability = random.uniform(0, 1)
-            random_cell = random.choice(list(all_non_zero_cells))
-            if probability < probability_map[random_cell]:
-                casualty_locations.add(random_cell)
-
-        return casualty_locations
 
     def update_probability_map(
             self, probability_map: dict[str, float], centre: tuple[float, float], f: float
@@ -362,15 +420,15 @@ class TestFramework:
         else:
             print(f"{self.name}'s Average Angle Curvature: NA")
 
-        print(f"{self.name}'s Casualties Captured: {metrics['casualties_captured']}/{metrics['casualties_count']}")
-        if metrics['false_negatives']:
-            print(f"{self.name}'s False Negatives: {metrics['false_negatives']}")
+        print(f"{self.name}'s Casualties Captured: {metrics['casualties_captured']}")
+        # if metrics['false_negatives']:
+        #     print(f"{self.name}'s False Negatives: {metrics['false_negatives']}")
 
-        minimum_time = metrics['minimum_time_captured']
-        if minimum_time is not None:
-            print(f"{self.name}'s Minimum Time Capture: {minimum_time} seconds")
-        else:
-            print(f"{self.name}'s Minimum Time Capture: NA")
+        # minimum_time = metrics['minimum_time_captured']
+        # if minimum_time is not None:
+        #     print(f"{self.name}'s Minimum Time Capture: {minimum_time} seconds")
+        # else:
+        #     print(f"{self.name}'s Minimum Time Capture: NA")
 
     def print_evaluation_averages(self):
         # Initialize sums for each metric
@@ -396,11 +454,13 @@ class TestFramework:
         for key, total in sums.items():
             if counts[key] > 0:
                 average = round(total / counts[key], 2)
-                if key in ['casualties_captured', 'casualties_count']:
+                if key == 'casualties_captured':
                     # These are counts, not averages, so handle them differently
-                    print(f"Total {key.replace('_', ' ').title()}: {total}")
-                else:
+                    print(f"Total {key.replace('_', ' ').title()}: {total}/{self.num_casualty}")
+                elif key in {'path_coverage', 'angle_curvature'}:
                     print(f"Average {key.replace('_', ' ').title()}: {average}")
+                else:
+                    pass
             else:
                 print(f"Average {key.replace('_', ' ').title()}: NA")
 
@@ -411,12 +471,12 @@ class TestFramework:
 
         :return: Coverage percentage.
         """
-        all_non_zero_cells = {
-            key for key, value in probability_map.items() if value != 0}
+        all_cells = {
+            key for key, value in probability_map.items()}
         covered_cells = {item["hex_idx"] for item in output}
-        path_covered = all_non_zero_cells & covered_cells
+        path_covered = all_cells & covered_cells
         path_coverage = round(len(path_covered) /
-                              len(all_non_zero_cells) * 100, 2)
+                              len(all_cells) * 100, 2)
         return path_coverage
 
     @staticmethod
