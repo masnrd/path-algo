@@ -5,6 +5,8 @@ import h3
 import folium
 import random
 from datetime import datetime
+from statistics import mean, pstdev
+from math import sqrt, radians, degrees, cos, sin, asin, atan2
 
 from clusterfinder.point import Point
 from clusterfinder.interface import ClusterFinder
@@ -44,7 +46,7 @@ class TestFramework:
         self.all_search_outputs = dict()
 
         # Metrics
-        self.evaluation_metrics = list()
+        self.all_evaluation_metrics = dict()
 
     def init_mission(self, main_map: folium.Map, centre: tuple[float, float], num_hotspot: int, num_casualty: int):
         self.num_hotspot = num_hotspot
@@ -62,8 +64,6 @@ class TestFramework:
         :param radius_km:
         :return: SW and NE bounding corners in lat, lng
         """
-        from math import radians, degrees, cos, sin, asin, atan2
-
         def calculate_offset(lat, lon, d_km, bearing):
             R = 6371.0  # Radius of the Earth in km
             bearing = radians(bearing)  # Convert bearing to radians
@@ -125,20 +125,33 @@ class TestFramework:
         return casualty_locations
 
     def run(
-            self, steps: int, update_map: bool = False, f: Optional[float] = None
+            self, steps: int, only_cluster: bool = False,
+            update_map: bool = False, f: Optional[float] = None,
+            print_output: bool = True
     ) -> dict[int: list]:
         # Stage 1: Region Segmentation - Clustering
         self.cluster_results = self.cluster_finder.fit()
-        self.cluster_finder.print_outputs()
+        if print_output:
+            self.cluster_finder.print_outputs()
 
         # TODO Stage 2: Region Allocation - Task Assignment
 
         # Stage 3: Search
         for cluster_id, cluster in self.cluster_results.items():
-            print(f"\nCluster:", cluster_id)
+            if print_output:
+                print(f"\nCluster:", cluster_id)
+
             # Step 1: Find centre for probability map
             centre = self.find_search_centre(cluster)
             self.all_centres[cluster_id] = centre
+
+            # Step 5a: Cluster evaluation
+            evaluation_metrics = dict()
+            evaluation_metrics = self.evaluate_cluster(evaluation_metrics, cluster, centre)
+
+            if only_cluster:
+                self.all_evaluation_metrics[cluster_id] = evaluation_metrics
+                continue
 
             # Step 2: Initialize probability map based on all mini hotspot
             probability_map = self.initialize_probability_map(centre, N_RINGS_CLUSTER)
@@ -155,12 +168,14 @@ class TestFramework:
             )
             self.all_search_outputs[cluster_id] = output
 
-            # Step 5: Evaluate
-            metrics = self.evaluate_search(
-                probability_map, self.casualty_locations, casualty_detected, output, minimum_time_captured, accumulated_angle
+            # Step 5b: Pathfinding evaluation
+            evaluation_metrics = self.evaluate_search(
+                evaluation_metrics, probability_map,
+                self.casualty_locations, casualty_detected, output, minimum_time_captured, accumulated_angle
             )
-            self.evaluation_metrics.append(metrics)
-            self.print_individual_metrics(metrics)
+            self.all_evaluation_metrics[cluster_id] = evaluation_metrics
+            if print_output:
+                self.print_individual_metrics(evaluation_metrics)
 
         self.print_evaluation_averages()
 
@@ -385,22 +400,57 @@ class TestFramework:
             print("Entire probability map is zero")
             return dict()
 
+    @staticmethod
+    def evaluate_cluster(metrics: dict, cluster: list[Point], centre: tuple[float, float]) -> dict:
+        """
+        Calculates the average distance and standard deviation of distances
+        of all points in the cluster to the centroid.
+
+        :param metrics: dict of metrics to update
+        :param cluster: List of Point objects.
+        :param centre: The centroid coordinates as a tuple (lat, lon).
+        :return: Dictionary with average distance and standard deviation.
+        """
+        def haversine(lon1, lat1, lon2, lat2):
+            # Convert decimal degrees to radians
+            lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+
+            # Haversine formula
+            dlon = lon2 - lon1
+            dlat = lat2 - lat1
+            a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+            c = 2 * asin(sqrt(a))
+            r = 6371
+            return c * r * 1000  # Return in meters
+
+        distances = [
+            haversine(point.coordinates[1], point.coordinates[0], centre[1], centre[0])
+            for point in cluster
+        ]
+
+        metrics.update({
+            'cluster_avg_dist': round(mean(distances), 2),
+            'cluster_std_dist': round(pstdev(distances), 2) if len(cluster) > 1 else 0
+        })
+        return metrics
+
     def evaluate_search(
-            self, probability_map: dict[str, float],
+            self, metrics: dict, probability_map: dict[str, float],
             casualty_locations: set, casualty_detected: dict,
             output: list, minimum_time_captured: int, accumulated_angle: float
-    ):
+    ) -> dict:
         """
         Evaluate the performance of the path_finder.
         """
-        return {
+        metrics.update({
             'path_coverage': self.check_path_coverage(probability_map, output),
             'angle_curvature': self.calculate_average_angle_curvature(output, accumulated_angle),
             'casualties_captured': len(casualty_detected),
             'casualties_count': len(casualty_locations),
             'minimum_time_captured': minimum_time_captured if minimum_time_captured else None,
             'false_negatives': self.check_guaranteed_capture(casualty_locations, casualty_detected)[1]
-        }
+        })
+        return metrics
 
     @staticmethod
     def calculate_average_angle_curvature(output, accumulated_angle):
@@ -413,7 +463,13 @@ class TestFramework:
         """
         Prints the individual metrics for a single evaluation.
         """
+        # Clustering
+        print(f"{self.name}'s Cluster Distance Average: {metrics['cluster_avg_dist']}m")
+        print(f"{self.name}'s Cluster Distance Standard Deviation: {metrics['cluster_std_dist']}m")
+
+        # Searching
         print(f"{self.name}'s Path Coverage: {metrics['path_coverage']}%")
+
         angle_curvature = metrics['angle_curvature']
         if angle_curvature is not None:
             print(f"{self.name}'s Average Angle Curvature: {angle_curvature} degrees")
@@ -433,6 +489,8 @@ class TestFramework:
     def print_evaluation_averages(self):
         # Initialize sums for each metric
         sums = {
+            'cluster_avg_dist': 0,
+            'cluster_std_dist': 0,
             'path_coverage': 0,
             'angle_curvature': 0,
             'casualties_captured': 0,
@@ -443,11 +501,18 @@ class TestFramework:
         counts = {key: 0 for key in sums}
 
         # Sum values from each evaluation
-        for metrics in self.evaluation_metrics:
-            for key, value in metrics.items():
-                if value is not None:
+        for _, evaluation_metrics in self.all_evaluation_metrics.items():
+            for key, value in evaluation_metrics.items():
+                if key in {"cluster_avg_dist", "cluster_std_dist"}:
+                    if value > 0:
+                        sums[key] += value
+                        counts[key] += 1
+                elif value is not None:
                     sums[key] += value
                     counts[key] += 1
+
+        # Clustering Metrics
+        print(f"Number of clusters {len(self.cluster_results)}")
 
         # Calculate and print averages
         print("\nAverage Evaluation Metrics:")
@@ -457,7 +522,7 @@ class TestFramework:
                 if key == 'casualties_captured':
                     # These are counts, not averages, so handle them differently
                     print(f"Total {key.replace('_', ' ').title()}: {total}/{self.num_casualty}")
-                elif key in {'path_coverage', 'angle_curvature'}:
+                elif key in {'path_coverage', 'angle_curvature', 'cluster_avg_dist', 'cluster_std_dist'}:
                     print(f"Average {key.replace('_', ' ').title()}: {average}")
                 else:
                     pass
