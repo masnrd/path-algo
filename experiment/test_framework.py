@@ -15,7 +15,7 @@ from utils.hex import *
 from utils.angle import *
 
 N_RINGS_CLUSTER = 16  # 7.5m * 16 = 240m radius
-MAIN_MAP_RADIUS = 0.5  # km
+MAIN_MAP_RADIUS = 0.1  # km
 
 
 class TestFramework:
@@ -125,7 +125,7 @@ class TestFramework:
         return casualty_locations
 
     def run(
-            self, steps: int, only_cluster: bool = False,
+            self, steps: int, only_cluster: bool = False, only_path: bool = False,
             update_map: bool = False, f: Optional[float] = None,
             print_output: bool = True
     ) -> dict[int: list]:
@@ -135,6 +135,13 @@ class TestFramework:
             self.cluster_finder.print_outputs()
 
         # TODO Stage 2: Region Allocation - Task Assignment
+
+        if only_path:
+            # Sort so only path planning for cluster with most hotspot
+            sorted_clusters = {
+                k: v for k, v in sorted(self.cluster_results.items(), key=lambda item: len(item[1]), reverse=True)
+            }
+            self.cluster_results = sorted_clusters
 
         # Stage 3: Search
         for cluster_id, cluster in self.cluster_results.items():
@@ -164,7 +171,7 @@ class TestFramework:
             # Step 4: Search
             self.path_finder_object = self.path_finder(self.res, centre)
             output, casualty_detected, minimum_time_captured, accumulated_angle = self.search(
-                probability_map, centre, self.casualty_locations, steps, update_map, f
+                probability_map, centre, self.casualty_locations, steps, print_output, update_map, f
             )
             self.all_search_outputs[cluster_id] = output
 
@@ -176,6 +183,9 @@ class TestFramework:
             self.all_evaluation_metrics[cluster_id] = evaluation_metrics
             if print_output:
                 self.print_individual_metrics(evaluation_metrics)
+
+            if only_path:
+                break
 
         self.print_evaluation_averages()
 
@@ -238,12 +248,13 @@ class TestFramework:
         return probability_map
 
     def search(
-            self, probability_map: dict[str, float], waypoint: tuple[float, float], casualty_locations: set,
-            steps: int, update_map: bool = False, f: Optional[float] = None
+            self, probability_map: dict[str, float], waypoint: tuple[float, float], casualty_locations: set, steps: int,
+            print_output: bool = False, update_map: bool = False, f: Optional[float] = None
     ) -> tuple:
         """
         Simulate the drone path
 
+        :param print_output:
         :param casualty_locations:
         :param probability_map:
         :param waypoint: current position
@@ -265,6 +276,8 @@ class TestFramework:
                 probability_map = self.update_probability_map(probability_map, waypoint, f)
 
             waypoint = self.path_finder_object.find_next_step(waypoint, probability_map)
+            if print_output:
+                print(f"Steps {i+1}: {waypoint}")
             hex_idx = h3.geo_to_h3(waypoint[0], waypoint[1], self.res)
 
             casualty_detected, end_time = self.handle_detection(
