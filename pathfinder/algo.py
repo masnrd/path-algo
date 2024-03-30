@@ -74,8 +74,6 @@ class BayesianHexSearch(PathFinder):
 
         Args:
             current_position (tuple[float, float]): Current position as a tuple of (latitude, longitude).
-            prob_map (dict): A numpy array of (7,7,7,7) representing the probability in each hexagon./ Dictionary of hexagons 
-
         Returns:
             tuple[int, int]: Next waypoint as a tuple of (latitude, longitude).
         """
@@ -90,7 +88,8 @@ class BayesianHexSearch(PathFinder):
         neighbours = h3.k_ring(curr_hexagon, 1)
 
         # Initialise variables to find the nest best neighbour
-        best_neighbour = None
+        path_to_max = h3.h3_line(curr_hexagon, max_hex_index)
+        best_neighbour = path_to_max[1] if len(path_to_max) > 1 else path_to_max[-1]
         highest_score = 0
 
         for neighbour in neighbours:
@@ -98,9 +97,7 @@ class BayesianHexSearch(PathFinder):
                 continue
             dist = distance_between_2_hexas(neighbour, max_hex_index)
             neighbour_prob = prob_map[neighbour]
-            # TODO: Test different parameters for this
-            score = dist * 100 + neighbour_prob * 10
-            # score = neighbour_prob * 10
+            score = 1 / (1 + dist) * 100 + neighbour_prob * 10
 
             if score > highest_score:
                 best_neighbour = neighbour

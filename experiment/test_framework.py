@@ -8,7 +8,7 @@ from utils.hex import *
 
 
 class TestFramework:
-    def __init__(self, name: str, centre: tuple[float, float], res: int, f: float = None):
+    def __init__(self, name: str, centre: tuple[float, float], res: int):
         self.name = name
         self.centre = centre
         self.res = res
@@ -17,14 +17,16 @@ class TestFramework:
         self.add_hotspot()
 
         self.waypoint = centre
-        self.f = f
+        self.visited = set()
+        centre_hex = h3.geo_to_h3(self.centre[0], self.centre[1], self.res)
+        self.visited.add(centre_hex)
         self.pathfinder = None
         self.output = []
         self.casualty_locations = set()
         self.casualty_detected = dict()
         self.minimum_time_captured = None
 
-    def run(self, steps: int, update_map: bool = False) -> list[dict]:
+    def run(self, step: int, update_map: bool = False) -> tuple[int, list[dict]]:
         """
         Simulate the drone path
 
@@ -35,32 +37,35 @@ class TestFramework:
         if not self.pathfinder:
             raise ValueError("Please Register your Pathfinder first")
 
-        start_time = datetime.now()
-        end_time = None
-        for i in range(steps):
-            if update_map:
-                self.update_probability_map()
+        # start_time = datetime.now()
+        # end_time = None
+        # for i in range(steps):
+        self.waypoint = self.pathfinder.find_next_step(
+            self.waypoint, self.probability_map)
+        zero = 1
+        if update_map:
+            zero, self.probability_map = self.update_probability_map(self.waypoint)
+        if zero == 0:
+            return True, self.output
 
-            self.waypoint = self.pathfinder.find_next_step(
-                self.waypoint, self.probability_map)
+        hex_idx = h3.geo_to_h3(self.waypoint[0], self.waypoint[1], self.res)
+        self.visited.add(hex_idx)
+        if hex_idx in self.casualty_locations:
+            coin = random.randint(1, 10)
+            if coin == 1:
+                self.casualty_detected[hex_idx] = False
+            else:
+                self.casualty_detected[hex_idx] = True
+            if len(self.casualty_detected) == len(self.casualty_locations):
+                end_time = datetime.now()
 
-            hex_idx = h3.geo_to_h3(self.waypoint[0], self.waypoint[1], self.res)
-            if hex_idx in self.casualty_locations:
-                coin = random.randint(1, 10)
-                if coin == 1:
-                    self.casualty_detected[hex_idx] = False
-                else:
-                    self.casualty_detected[hex_idx] = True
-                if len(self.casualty_detected) == len(self.casualty_locations):
-                    end_time = datetime.now()
+        self.output.append({"hex_idx": h3.geo_to_h3(
+            self.waypoint[0], self.waypoint[1], self.res), "step_count": step})
+        # if end_time:
+        #     self.minimum_time_captured = end_time - start_time
+        #     self.minimum_time_captured = self.minimum_time_captured.total_seconds()
 
-            self.output.append({"hex_idx": h3.geo_to_h3(
-                self.waypoint[0], self.waypoint[1], self.res), "step_count": i})
-        if end_time:
-            self.minimum_time_captured = end_time - start_time
-            self.minimum_time_captured = self.minimum_time_captured.total_seconds()
-
-        return self.output
+        return False, self.output
 
     def register_pathfinder(self, pathfinder: PathFinder):
         """
@@ -70,21 +75,23 @@ class TestFramework:
         """
         self.pathfinder = pathfinder(self.res, self.centre)
 
-    def initialize_probability_map(self, n_rings: int) -> dict[str, float]:
+    def initialize_probability_map(self, n_rings: int=10) -> dict[str, float]:
         """
         Initialize the probability map.
 
         :param n_rings: Number of rings around the center hexagon.
         :return: Dictionary containing hex index as key and its probability as value.
         """
-        probability_map = {}
-        all_hex = h3.k_ring(h3.geo_to_h3(
-            self.centre[0], self.centre[1], self.res), n_rings)
-        for hex in all_hex:
-            probability_map[hex] = 0
-        return probability_map
+        prob_map = {}
+        h3_indices = h3.k_ring(
+            h3.geo_to_h3(self.centre[0], self.centre[1], self.res),
+            n_rings,
+        )
+        for h3_index in h3_indices:
+            prob_map[h3_index] = 0
+        return prob_map
 
-    def add_hotspot(self, sigma: float = 0.00003, r_range: int = 10):
+    def add_hotspot(self, sigma: float = 0.00003, r_range: int = 20):
         """
         Update the probability map based on a given hotspot.
 
@@ -97,25 +104,52 @@ class TestFramework:
         Returns:
         - Updated prob_en
         """
-        def gaussian_probability(distance, sigma=0.01):
-            return np.exp(-distance**2 / (2 * sigma**2))
+        def gaussian_probability(dist, sig=0.3):
+            return np.exp(-dist ** 2 / (2 * sig ** 2))
 
-        hex_hotspot = h3.geo_to_h3(self.centre[0], self.centre[1], self.res)
-        for i in range(0, r_range):
-            hex_at_r = h3.hex_ring(hex_hotspot, i)
-            distance = euclidean(h3.h3_to_geo(hex_hotspot), h3.h3_to_geo(next(iter(hex_at_r))))
-            probability = gaussian_probability(distance, sigma)
-            for hex_idx in hex_at_r:
-                if hex_idx in self.probability_map.keys():
-                    self.probability_map[hex_idx] += probability
+        def euclidean(point1, point2):
+            return np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
 
-        # Distribute
+        delta_probability_map = {}
+        hotspots = random.choices(list(self.probability_map.keys()), k=4)
+        hotspots = ['8f6526ac34230a1', '8f6526ac34235ad', '8f6526ac3423c08', '8f6526ac3423cb0']
+        # hex_hotspot = h3.geo_to_h3(self.centre[0], self.centre[1], self.res)
+        # hotspots = [hex_hotspot]
+
+        for hex_hotspot in hotspots:
+            # NOTE: Sanity check to see if hex_hotspot being added to the map is within the map size
+            if hex_hotspot not in self.probability_map: print(f'Hex hotspot {hex_hotspot} not in prob_map')
+
+            for i in range(0, r_range):
+                hex_at_r = h3.hex_ring(hex_hotspot, i)
+                if hex_at_r:
+                    distance = euclidean(h3.h3_to_geo(hex_hotspot),
+                                         h3.h3_to_geo(next(iter(hex_at_r))))
+                    probability = gaussian_probability(distance, sigma)
+                    for hex_idx in hex_at_r:
+                        if hex_idx in self.probability_map:
+                            delta_probability_map[hex_idx] = probability + delta_probability_map.get(hex_idx, 0)
+                        else:
+                            pass
+        # Normalize the delta_probability_map
+        total_delta_prob = sum(delta_probability_map.values())
+        if total_delta_prob != 0:
+            delta_probability_map = {key: (value / total_delta_prob) for key, value in delta_probability_map.items()}
+        # Update the original probability map with the delta_probability_map
+        for hex_idx, value in delta_probability_map.items():
+            if hex_idx in self.probability_map:
+                self.probability_map[hex_idx] += value
+            else:
+                print("Delta not in original prob")
+                pass
+        # Normalize the updated probability map
         total_prob = sum(self.probability_map.values())
         if total_prob != 0:
-            self.probability_map = {
-                key: value / total_prob for key, value in self.probability_map.items()}
+            self.probability_map = {key: (value / total_prob) for key, value in self.probability_map.items()}
         else:
             print("Entire probability map is zero")
+
+        return self.probability_map
 
     def generate_casualty(self, num_casualty: int):
         """
@@ -129,37 +163,34 @@ class TestFramework:
             random_cell = random.choice(list(all_non_zero_cells))
             if probability < self.probability_map[random_cell]:
                 self.casualty_locations.add(random_cell)
+        self.casualty_locations = {'8f6526ac3423c91', '8f6526ac3423c0d', '8f6526ac3423c2a', '8f6526ac3422269', '8f6526ac3423502', '8f6526ac3423ca4', '8f6526ac3423516', '8f6526ac342359c', '8f6526ac3423180', '8f6526ac3423085'}
 
 
-    def update_probability_map(self):
-        """Update the probability map using Baye's theorem.
+    def update_probability_map(self, curr_hex, f=1):
+        hex_centre = h3.geo_to_h3(
+            curr_hex[0], curr_hex[1], self.res)
 
-        Args:
-            prob_map (np.ndarray): A numpy array of (7,7,7,7) representing the probability in each hexagon.
-            waypoint (tuple[float, float]): Current search position as a tuple of (latitude, longitude).
-            res (_type_): The H3 resolution of the hexagon associated with the position.
-            f (_type_): The probability of detecting a person.
-
-        Returns:
-            np.ndarray: The updated probability map.
-        """
-        hex_waypoint = h3.geo_to_h3(
-            self.waypoint[0], self.waypoint[1], self.res)
+        if hex_centre not in self.probability_map:
+            print("Has not reached cluster hex map yet")
+            return # When it is traveling to prob map
 
         # Prior
-        prior = self.probability_map[hex_waypoint]
-
+        prior = self.probability_map[hex_centre]
         # Posterior
-        posterior = prior*(1-self.f) / (1-prior*self.f)
-        self.probability_map[hex_waypoint] = posterior
+        posterior = prior*(1-f) / (1-prior*f)
+        posterior = 0
+
+        self.probability_map[hex_centre] = posterior
 
         # Distribute
-        total_prob = sum(self.probability_map.values())
-        if total_prob != 0:
-            self.probability_map = {
-                key: value / total_prob for key, value in self.probability_map.items()}
+        sum_after_update = sum(self.probability_map.values())
+        if sum_after_update != 0:
+            probability_map = {
+                key: value / sum_after_update for key, value in self.probability_map.items()}
+            return 1, probability_map
         else:
             print("Entire probability map is zero")
+            return 0, self.probability_map
 
     def evaluate(self):
         """
